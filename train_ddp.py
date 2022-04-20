@@ -48,35 +48,65 @@ def get_opt():
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-
+    
     # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", init_method='env://', rank=rank, world_size=world_size)
 
 def cleanup():
     dist.destroy_process_group()
 
+# - added utility method found on here https://github.com/pytorch/pytorch/issues/8741#issuecomment-402129385
+# - basically this method adds optimization params to cuda since method is not native on Pytorch
+# - turns out that so far DistributedDataParallel is not complaining without using this method but it is here just in case
+# - add it right after defining optimizer before train loop 
+def optimizer_to(optim, device):
+    # move optimizer to device
+    for param in optim.state.values():
+        # Not sure there are any global tensors in the state dict
+        if isinstance(param, torch.Tensor):
+            param.data = param.data.cuda(device)
+            if param._grad is not None:
+                param._grad.data = param._grad.data.cuda(device)
+        elif isinstance(param, dict):
+            for subparam in param.values():
+                if isinstance(subparam, torch.Tensor):
+                    subparam.data = subparam.data.cuda(device)
+                    if subparam._grad is not None:
+                        subparam._grad.data = subparam._grad.data.cuda(device)
+
 def train_gmm(opt, train_loader, model, board, rank, world_size):
     model.train()
+
+    torch.cuda.set_device(rank)
+    model.cuda(rank)
+    
+    # is cuda being used?
+    #print(torch.cuda.is_available())
+    #print(torch.cuda.current_device())
+    #print(torch.cuda.device(0))
+    #print(torch.cuda.device_count())
+    #print(torch.cuda.get_device_name(0))
+
+    # criterion
+    criterionL1 = nn.L1Loss().cuda(rank)
+    
+    # optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=opt.lr, betas=(0.5, 0.999))
+    optimizer_to(optimizer, rank)
+    
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda = lambda step: 1.0 -
+            max(0, step - opt.keep_step) / float(opt.decay_step + 1))
 
     # adding for multiple GPUs    
     if torch.cuda.device_count() > 1:
         print("Let's use", torch.cuda.device_count(), "GPUs!")
         model = DDP(model, device_ids=[rank])
-    
-    # is cuda being used?
-    print(torch.cuda.is_available())
-    #print(torch.cuda.current_device())
-    #print(torch.cuda.device(0))
-    print(torch.cuda.device_count())
-    print(torch.cuda.get_device_name(0))
 
-    # criterion
-    criterionL1 = nn.L1Loss()
-    
-    # optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=opt.lr, betas=(0.5, 0.999))
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda = lambda step: 1.0 -
-            max(0, step - opt.keep_step) / float(opt.decay_step + 1))
+    # create dataset 
+    train_dataset = CPDataset(opt)
+
+    # create dataloader
+    train_loader = CPDataLoader(opt, train_dataset, rank, world_size, is_distributed=True)
     
     epoch_length = len(train_loader.dataset) // opt.batch_size
     epochs = (opt.keep_step + opt.decay_step) // epoch_length
@@ -90,16 +120,17 @@ def train_gmm(opt, train_loader, model, board, rank, world_size):
         for step in range(opt.keep_step + opt.decay_step):
             iter_start_time = time.time()
             inputs = train_loader.next_batch()
-                
-            im = inputs['image'].to(rank)
-            im_pose = inputs['pose_image'].to(rank)
-            im_h = inputs['head'].to(rank)
-            shape = inputs['shape'].to(rank)
-            agnostic = inputs['agnostic'].to(rank)
-            c = inputs['cloth'].to(rank)
-            cm = inputs['cloth_mask'].to(rank)
-            im_c =  inputs['parse_cloth'].to(rank)
-            im_g = inputs['grid_image'].to(rank)
+            print('data')
+            print(rank)
+            im = inputs['image'].cuda(rank)
+            im_pose = inputs['pose_image'].cuda(rank)
+            im_h = inputs['head'].cuda(rank)
+            shape = inputs['shape'].cuda(rank)
+            agnostic = inputs['agnostic'].cuda(rank)
+            c = inputs['cloth'].cuda(rank)
+            cm = inputs['cloth_mask'].cuda(rank)
+            im_c =  inputs['parse_cloth'].cuda(rank)
+            im_g = inputs['grid_image'].cuda(rank)
             
             grid, theta = model(agnostic, c)
             warped_cloth = F.grid_sample(c, grid, padding_mode='border')
@@ -185,35 +216,35 @@ def train_tom(opt, train_loader, model, board):
 
 def main(rank, world_size):
     opt = get_opt()
-    print(opt)
+    #print(opt)
     print("Start to train stage: %s, named: %s!" % (opt.stage, opt.name))
-    
+    print(rank)
+
+    torch.cuda.set_device(rank)
     # setup distributed environment
     setup(rank, world_size)
-
-    # create dataset 
-    train_dataset = CPDataset(opt)
-
-    # create dataloader
-    train_loader = CPDataLoader(opt, train_dataset, rank, world_size, is_distributed=True)
 
     # visualization
     if not os.path.exists(opt.tensorboard_dir):
         os.makedirs(opt.tensorboard_dir)
     board = SummaryWriter(log_dir = os.path.join(opt.tensorboard_dir, opt.name))
-   
+
     # create model & train & save the final checkpoint
     if opt.stage == 'GMM':
-        model = GMM(opt, rank).to(rank)
+        print('model')
+        print(rank)
+        #model = GMM(opt, rank).to(rank)
+        model = GMM(opt, rank)
         if not opt.checkpoint =='' and os.path.exists(opt.checkpoint):
+            print('loading checkpoint')
             load_checkpoint(model, opt.checkpoint, rank)        
-        train_gmm(opt, train_loader, model, board, rank, world_size)
+        train_gmm(opt, 'hello', model, board, rank, world_size)
         save_checkpoint(model, os.path.join(opt.checkpoint_dir, opt.name, 'gmm_final.pth'), rank)
     elif opt.stage == 'TOM':
         model = UnetGenerator(25, 4, 6, ngf=64, norm_layer=nn.InstanceNorm2d)
         if not opt.checkpoint =='' and os.path.exists(opt.checkpoint):
             load_checkpoint(model, opt.checkpoint, rank)
-        train_tom(opt, train_loader, model, board)
+        train_tom(opt, 'hello', model, board)
         save_checkpoint(model, os.path.join(opt.checkpoint_dir, opt.name, 'tom_final.pth'), rank)
     else:
         raise NotImplementedError('Model [%s] is not implemented' % opt.stage)

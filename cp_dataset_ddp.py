@@ -155,6 +155,8 @@ class CPDataLoader(object):
         super(CPDataLoader, self).__init__()
 
         if is_distributed:
+            print('dataset')
+            print(rank)
             train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)            
             if opt.shuffle :
                 train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)

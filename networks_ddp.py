@@ -115,9 +115,9 @@ class FeatureRegression(nn.Module):
         self.linear = nn.Linear(64 * 4 * 3, output_dim)
         self.tanh = nn.Tanh()
         if use_cuda:
-            self.conv.to(rank)
-            self.linear.to(rank)
-            self.tanh.to(rank)
+            self.conv.cuda(rank)
+            self.linear.cuda(rank)
+            self.tanh.cuda(rank)
 
     def forward(self, x):
         x = self.conv(x)
@@ -154,8 +154,8 @@ class TpsGridGen(nn.Module):
         self.grid_X = torch.FloatTensor(self.grid_X).unsqueeze(0).unsqueeze(3)
         self.grid_Y = torch.FloatTensor(self.grid_Y).unsqueeze(0).unsqueeze(3)
         if use_cuda:
-            self.grid_X = self.grid_X.to(rank)
-            self.grid_Y = self.grid_Y.to(rank)
+            self.grid_X = self.grid_X.cuda(rank)
+            self.grid_Y = self.grid_Y.cuda(rank)
 
         # initialize regular grid for control points P_i
         if use_regular_grid:
@@ -172,10 +172,10 @@ class TpsGridGen(nn.Module):
             self.P_X = P_X.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0,4)
             self.P_Y = P_Y.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0,4)
             if use_cuda:
-                self.P_X = self.P_X.to(rank)
-                self.P_Y = self.P_Y.to(rank)
-                self.P_X_base = self.P_X_base.to(rank)
-                self.P_Y_base = self.P_Y_base.to(rank)
+                self.P_X = self.P_X.cuda(rank)
+                self.P_Y = self.P_Y.cuda(rank)
+                self.P_X_base = self.P_X_base.cuda(rank)
+                self.P_Y_base = self.P_Y_base.cuda(rank)
 
             
     def forward(self, theta):
@@ -198,7 +198,7 @@ class TpsGridGen(nn.Module):
         L = torch.cat((torch.cat((K,P),1),torch.cat((P.transpose(0,1),Z),1)),0)
         Li = torch.inverse(L)
         if self.use_cuda:
-            Li = Li.to(rank)
+            Li = Li.cuda(rank)
         return Li
         
     def apply_transformation(self,theta,points):
@@ -386,7 +386,7 @@ class VGGLoss(nn.Module):
     def __init__(self, rank, layids = None):
         super(VGGLoss, self).__init__()
         self.vgg = Vgg19()
-        self.vgg.to(rank)
+        self.vgg.cuda(rank)
         self.criterion = nn.L1Loss()
         self.weights = [1.0/32, 1.0/16, 1.0/8, 1.0/4, 1.0]
         self.layids = layids
@@ -409,8 +409,8 @@ class GMM(nn.Module):
         self.extractionB = FeatureExtraction(3, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d)
         self.l2norm = FeatureL2Norm()
         self.correlation = FeatureCorrelation()
-        self.regression = FeatureRegression(rank, input_nc=192, output_dim=2*opt.grid_size**2, use_cuda=False)
-        self.gridGen = TpsGridGen(rank, opt.fine_height, opt.fine_width, use_cuda=False, grid_size=opt.grid_size)
+        self.regression = FeatureRegression(rank, input_nc=192, output_dim=2*opt.grid_size**2, use_cuda=True)
+        self.gridGen = TpsGridGen(rank, opt.fine_height, opt.fine_width, use_cuda=True, grid_size=opt.grid_size)
         
     def forward(self, inputA, inputB):
         featureA = self.extractionA(inputA)
@@ -428,10 +428,10 @@ def save_checkpoint(model, save_path, rank):
         os.makedirs(os.path.dirname(save_path))
 
     torch.save(model.cpu().state_dict(), save_path)
-    model.to(rank)
+    model.cuda(rank)
 
 def load_checkpoint(model, checkpoint_path, rank):
     if not os.path.exists(checkpoint_path):
         return
     model.load_state_dict(torch.load(checkpoint_path))
-    model.to(rank)
+    model.cuda(rank)
