@@ -17,6 +17,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+print('HELLO TEST')
+
 def get_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default = "GMM")
