@@ -127,3 +127,12 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# cp-vton ignore
+checkpoints/
+data
+/data
+result/
+shellscripts/
+tensorboard/
+myfile.out
