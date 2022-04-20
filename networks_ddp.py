@@ -1,6 +1,7 @@
 #coding=utf-8
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn import init
 from torchvision import models
 import os
