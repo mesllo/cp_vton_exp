@@ -428,7 +428,8 @@ def save_checkpoint(model, save_path, rank):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
 
-    torch.save(model.cpu().state_dict(), save_path)
+    #torch.save(model.cpu().state_dict(), save_path)
+    torch.save(model.state_dict(), save_path)
     model.cuda(rank)
 
 def load_checkpoint(model, checkpoint_path, rank):

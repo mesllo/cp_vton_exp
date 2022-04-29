@@ -151,12 +151,10 @@ class CPDataset(data.Dataset):
         return len(self.im_names)
 
 class CPDataLoader(object):
-    def __init__(self, opt, dataset, rank, world_size, is_distributed=False):
+    def __init__(self, opt, dataset, rank, world_size):
         super(CPDataLoader, self).__init__()
 
-        if is_distributed:
-            print('dataset')
-            print(rank)
+        if opt.distributed:
             train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)            
             if opt.shuffle :
                 train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
