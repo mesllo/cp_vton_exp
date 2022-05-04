@@ -53,7 +53,7 @@ def init_weights(net, init_type='normal'):
         raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
 
 class FeatureExtraction(nn.Module):
-    def __init__(self, input_nc, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_dropout=False):
+    def __init__(self, rank, input_nc, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_dropout=False):
         super(FeatureExtraction, self).__init__()
         downconv = nn.Conv2d(input_nc, ngf, kernel_size=4, stride=2, padding=1)
         model = [downconv, nn.ReLU(True), norm_layer(ngf)]
@@ -67,7 +67,7 @@ class FeatureExtraction(nn.Module):
         model += [norm_layer(512)]
         model += [nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1), nn.ReLU(True)]
         
-        self.model = nn.Sequential(*model)
+        self.model = nn.Sequential(*model)#.cuda(rank)
         init_weights(self.model, init_type='normal')
 
     def forward(self, x):
@@ -97,7 +97,7 @@ class FeatureCorrelation(nn.Module):
         return correlation_tensor
     
 class FeatureRegression(nn.Module):
-    def __init__(self, input_nc=512,output_dim=6, use_cuda=False):
+    def __init__(self, rank, input_nc=512,output_dim=6, use_cuda=False):
         super(FeatureRegression, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(input_nc, 512, kernel_size=4, stride=2, padding=1),
@@ -115,11 +115,10 @@ class FeatureRegression(nn.Module):
         )
         self.linear = nn.Linear(64 * 4 * 3, output_dim)
         self.tanh = nn.Tanh()
-
         if use_cuda:
-            self.conv.cuda()
-            self.linear.cuda()
-            self.tanh.cuda()
+            self.conv.cuda(rank)
+            self.linear.cuda(rank)
+            self.tanh.cuda(rank)
 
     def forward(self, x):
         x = self.conv(x)
@@ -142,7 +141,7 @@ class AffineGridGen(nn.Module):
         return F.affine_grid(theta, out_size)
         
 class TpsGridGen(nn.Module):
-    def __init__(self, out_h=256, out_w=192, use_regular_grid=True, grid_size=3, reg_factor=0, use_cuda=False):
+    def __init__(self, rank, out_h=256, out_w=192, use_regular_grid=True, grid_size=3, reg_factor=0, use_cuda=False):
         super(TpsGridGen, self).__init__()
         self.out_h, self.out_w = out_h, out_w
         self.reg_factor = reg_factor
@@ -155,10 +154,9 @@ class TpsGridGen(nn.Module):
         # grid_X,grid_Y: size [1,H,W,1,1]
         self.grid_X = torch.FloatTensor(self.grid_X).unsqueeze(0).unsqueeze(3)
         self.grid_Y = torch.FloatTensor(self.grid_Y).unsqueeze(0).unsqueeze(3)
-
         if use_cuda:
-            self.grid_X = self.grid_X.cuda()
-            self.grid_Y = self.grid_Y.cuda()
+            self.grid_X = self.grid_X.cuda(rank)
+            self.grid_Y = self.grid_Y.cuda(rank)
 
         # initialize regular grid for control points P_i
         if use_regular_grid:
@@ -171,21 +169,22 @@ class TpsGridGen(nn.Module):
             P_Y = torch.FloatTensor(P_Y)
             self.P_X_base = P_X.clone()
             self.P_Y_base = P_Y.clone()
-            self.Li = self.compute_L_inverse(P_X,P_Y).unsqueeze(0)
+            self.Li = self.compute_L_inverse(P_X,P_Y,rank).unsqueeze(0)
             self.P_X = P_X.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0,4)
             self.P_Y = P_Y.unsqueeze(2).unsqueeze(3).unsqueeze(4).transpose(0,4)
             if use_cuda:
-                self.P_X = self.P_X.cuda()
-                self.P_Y = self.P_Y.cuda()
-                self.P_X_base = self.P_X_base.cuda()
-                self.P_Y_base = self.P_Y_base.cuda()
+                self.P_X = self.P_X.cuda(rank)
+                self.P_Y = self.P_Y.cuda(rank)
+                self.P_X_base = self.P_X_base.cuda(rank)
+                self.P_Y_base = self.P_Y_base.cuda(rank)
+
             
     def forward(self, theta):
         warped_grid = self.apply_transformation(theta,torch.cat((self.grid_X,self.grid_Y),3))
         
         return warped_grid
     
-    def compute_L_inverse(self,X,Y):
+    def compute_L_inverse(self,X,Y,rank):
         N = X.size()[0] # num of points (along dim 0)
         # construct matrix K
         Xmat = X.expand(N,N)
@@ -200,7 +199,7 @@ class TpsGridGen(nn.Module):
         L = torch.cat((torch.cat((K,P),1),torch.cat((P.transpose(0,1),Z),1)),0)
         Li = torch.inverse(L)
         if self.use_cuda:
-            Li = Li.cuda()
+            Li = Li.cuda(rank)
         return Li
         
     def apply_transformation(self,theta,points):
@@ -284,17 +283,17 @@ class TpsGridGen(nn.Module):
 # if |num_downs| == 7, image of size 128x128 will become of size 1x1
 # at the bottleneck
 class UnetGenerator(nn.Module):
-    def __init__(self, input_nc, output_nc, num_downs, ngf=64,
+    def __init__(self, rank, input_nc, output_nc, num_downs, ngf=64,
                  norm_layer=nn.BatchNorm2d, use_dropout=False):
         super(UnetGenerator, self).__init__()
         # construct unet structure
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)
+        unet_block = UnetSkipConnectionBlock(rank, ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)
         for i in range(num_downs - 5):
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
+            unet_block = UnetSkipConnectionBlock(rank, ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
+        unet_block = UnetSkipConnectionBlock(rank, ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(rank, ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(rank, ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(rank, output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
 
         self.model = unet_block
 
@@ -306,7 +305,7 @@ class UnetGenerator(nn.Module):
 # X -------------------identity---------------------- X
 #   |-- downsampling -- |submodule| -- upsampling --|
 class UnetSkipConnectionBlock(nn.Module):
-    def __init__(self, outer_nc, inner_nc, input_nc=None,
+    def __init__(self, rank, outer_nc, inner_nc, input_nc=None,
                  submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
@@ -344,7 +343,7 @@ class UnetSkipConnectionBlock(nn.Module):
             else:
                 model = down + [submodule] + up
 
-        self.model = nn.Sequential(*model)#.cuda()
+        self.model = nn.Sequential(*model).cuda(rank)
 
     def forward(self, x):
         if self.outermost:
@@ -385,10 +384,10 @@ class Vgg19(nn.Module):
         return out
 
 class VGGLoss(nn.Module):
-    def __init__(self, layids = None):
+    def __init__(self, rank, layids = None):
         super(VGGLoss, self).__init__()
         self.vgg = Vgg19()
-        self.vgg#.cuda()
+        self.vgg.cuda(rank)
         self.criterion = nn.L1Loss()
         self.weights = [1.0/32, 1.0/16, 1.0/8, 1.0/4, 1.0]
         self.layids = layids
@@ -405,37 +404,36 @@ class VGGLoss(nn.Module):
 class GMM(nn.Module):
     """ Geometric Matching Module
     """
-    def __init__(self, opt):
+    def __init__(self, opt, rank):
         super(GMM, self).__init__()
-        self.extractionA = FeatureExtraction(22, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d) 
-        self.extractionB = FeatureExtraction(3, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d)
+        self.extractionA = FeatureExtraction(rank, 22, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d) 
+        self.extractionB = FeatureExtraction(rank, 3, ngf=64, n_layers=3, norm_layer=nn.BatchNorm2d)
         self.l2norm = FeatureL2Norm()
         self.correlation = FeatureCorrelation()
-        self.regression = FeatureRegression(input_nc=192, output_dim=2*opt.grid_size**2, use_cuda=True)
-        self.gridGen = TpsGridGen(opt.fine_height, opt.fine_width, use_cuda=True, grid_size=opt.grid_size)
+        self.regression = FeatureRegression(rank, input_nc=192, output_dim=2*opt.grid_size**2, use_cuda=True)
+        self.gridGen = TpsGridGen(rank, opt.fine_height, opt.fine_width, use_cuda=True, grid_size=opt.grid_size)
         
     def forward(self, inputA, inputB):
         featureA = self.extractionA(inputA)
         featureB = self.extractionB(inputB)
         featureA = self.l2norm(featureA)
         featureB = self.l2norm(featureB)
-
         correlation = self.correlation(featureA, featureB)
+
         theta = self.regression(correlation)
         grid = self.gridGen(theta)
         return grid, theta
 
-def save_checkpoint(model, save_path):
+def save_checkpoint(model, save_path, rank):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
 
     torch.save(model.cpu().state_dict(), save_path)
     #torch.save(model.state_dict(), save_path)
-    print('Checkpoint!')
-    model.cuda()
+    model.cuda(rank)
 
-def load_checkpoint(model, checkpoint_path):
+def load_checkpoint(model, checkpoint_path, rank):
     if not os.path.exists(checkpoint_path):
         return
     model.load_state_dict(torch.load(checkpoint_path))
-    model.cuda()
+    model.cuda(rank)

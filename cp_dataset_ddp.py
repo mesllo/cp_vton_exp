@@ -143,7 +143,8 @@ class CPDataset(data.Dataset):
             'head': im_h,           # for visualization
             'pose_image': im_pose,  # for visualization
             'grid_image': im_g,     # for visualization
-            }
+            'index': index
+        }
 
         return result
 
@@ -155,18 +156,18 @@ class CPDataLoader(object):
         super(CPDataLoader, self).__init__()
 
         if opt.distributed:
-            train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)            
-            if opt.shuffle :
-                train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+            # always shuffling if distributed
+            train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
         else:
             if opt.shuffle :
                 train_sampler = data.sampler.RandomSampler(dataset)
             else:
                 train_sampler = None
         
+        # Added drop_last to have equal batch size throughout
         self.data_loader = data.DataLoader(
-                dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
-                num_workers=opt.workers, pin_memory=True, sampler=train_sampler)
+                dataset, batch_size=opt.batch_size, shuffle=False,
+                num_workers=opt.workers, pin_memory=True, drop_last=True, sampler=train_sampler)
         self.dataset = dataset
         self.data_iter = self.data_loader.__iter__()
        
