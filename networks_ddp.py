@@ -425,13 +425,13 @@ class GMM(nn.Module):
         grid = self.gridGen(theta)
         return grid, theta
 
-def save_checkpoint(model, save_path):
+def save_checkpoint(model, save_path, rank):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
-
-    torch.save(model.cpu().state_dict(), save_path)
-    #torch.save(model.state_dict(), save_path)
-    print('Checkpoint!')
+    if rank == 0:
+        #torch.save(model.cpu().state_dict(), save_path)
+        torch.save(model.state_dict(), save_path)
+        print('Checkpoint!')
     model.cuda()
 
 def load_checkpoint(model, checkpoint_path):

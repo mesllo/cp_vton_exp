@@ -16,6 +16,7 @@ from visualization import board_add_image, board_add_images
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
+
 import numpy as np
 import random
 
@@ -87,6 +88,11 @@ def optimizer_to(optim):
 #################################
 
 def train_gmm(opt, train_loader, model, board, rank, world_size, batch_size):
+    # distributed
+    if opt.distributed:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+        model = DDP(model, device_ids=[rank])
+
     # set model to train
     model.train()
 
@@ -100,11 +106,8 @@ def train_gmm(opt, train_loader, model, board, rank, world_size, batch_size):
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda = lambda step: 1.0 -
             max(0, step - opt.keep_step) / float(opt.decay_step + 1))
 
-    # adding for multiple GPUs    
-    if opt.distributed:
-        print("Let's use", torch.cuda.device_count(), "GPUs!")
-        model = DDP(model, device_ids=[rank])
-
+    print('dataset length  :' + str(len(train_loader.dataset)))
+    print('loader length  :' + str(len(train_loader)))
     # - define epoch lengths for DDP to call set_epoch method
     # - we are calling drop_last in dataloader to ensure that 
     # these lengths are consistent for all batches
